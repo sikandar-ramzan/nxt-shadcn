@@ -55,14 +55,7 @@ const DecibelMeter: React.FC<DecibelMeterProps> = ({ stream }) => {
     };
   }, [stream]);
 
-  // const decibelLevelPercentage =
-  //   Math.min(Math.max((decibel + 100) / 100, 0), 1) * 10; // Normalize for level indicator
-
-  //get decibel as whole numbers
   const decibelLevelPercentage = Math.round(decibel);
-
-  console.log('Mic Name: ', stream?.getAudioTracks()[0].label);
-  console.log('DecibelLevelPercentage: ', decibelLevelPercentage);
 
   return (
     <div className="mt-4">
@@ -96,12 +89,22 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
   const [stream, setStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then((deviceInfos) => {
-      const audioDevices = deviceInfos.filter(
-        (device) => device.kind === 'audioinput'
-      );
-      setDevices(audioDevices as Device[]);
-    });
+    const getMicrophoneAccess = async () => {
+      try {
+        // Request permission to access the microphone
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Enumerate devices once permission is granted
+        const deviceInfos = await navigator.mediaDevices.enumerateDevices();
+        const audioDevices = deviceInfos.filter(
+          (device) => device.kind === 'audioinput'
+        );
+        setDevices(audioDevices as Device[]);
+      } catch (error) {
+        console.error('Error accessing microphone:', error);
+      }
+    };
+
+    getMicrophoneAccess();
   }, []);
 
   const handleStartTalking = async () => {
