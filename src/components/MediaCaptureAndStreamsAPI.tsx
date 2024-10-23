@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Download } from 'lucide-react';
+import { Mic, MicOff, Download, Play } from 'lucide-react';
 
 interface DecibelMeterProps {
   stream: MediaStream | null;
@@ -85,16 +85,19 @@ interface Device {
 
 const Section: React.FC<{ title: string }> = ({ title }) => {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [speakers, setSpeakers] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(
     null
   );
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    const getMicrophoneAccess = async () => {
+    const getDevices = async () => {
       try {
         // Request permission to access the microphone
         await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -103,13 +106,17 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
         const audioDevices = deviceInfos.filter(
           (device) => device.kind === 'audioinput'
         );
+        const audioOutputs = deviceInfos.filter(
+          (device) => device.kind === 'audiooutput'
+        );
         setDevices(audioDevices as Device[]);
+        setSpeakers(audioOutputs as Device[]);
       } catch (error) {
-        console.error('Error accessing microphone:', error);
+        console.error('Error accessing devices:', error);
       }
     };
 
-    getMicrophoneAccess();
+    getDevices();
   }, []);
 
   const handleStartTalking = async () => {
@@ -157,6 +164,22 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
     }
   };
 
+  const handlePlayAudio = () => {
+    if (audioBlob && selectedSpeaker) {
+      const audio = new Audio(URL.createObjectURL(audioBlob));
+      audioRef.current = audio;
+
+      // Set the output device if supported
+      if (audio.setSinkId) {
+        audio.setSinkId(selectedSpeaker).catch((err) => {
+          console.error('Error setting output device:', err);
+        });
+      }
+
+      audio.play().catch((err) => console.error('Error playing audio:', err));
+    }
+  };
+
   const handleDownloadAudio = () => {
     if (audioBlob && selectedDevice) {
       const micName = devices.find(
@@ -196,6 +219,24 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
             ))}
           </SelectContent>
         </Select>
+        <Select
+          onValueChange={setSelectedSpeaker}
+          value={selectedSpeaker || ''}
+        >
+          <SelectTrigger className="w-full mt-4">
+            <SelectValue placeholder="Select Speaker" />
+          </SelectTrigger>
+          <SelectContent>
+            {speakers.map((device) => (
+              <SelectItem
+                key={device.deviceId}
+                value={device.deviceId || `device-${Math.random()}`}
+              >
+                {device.label || `Speaker ${device.deviceId}`}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <div className="flex gap-4 mt-4">
           <Button onClick={handleStartTalking} disabled={!selectedDevice}>
             <Mic className="mr-2 h-4 w-4" /> Start Talking
@@ -208,9 +249,14 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
             <MicOff className="mr-2 h-4 w-4" /> Stop Talking
           </Button>
           {audioBlob && (
-            <Button onClick={handleDownloadAudio} variant="secondary">
-              <Download className="mr-2 h-4 w-4" /> Download Audio
-            </Button>
+            <>
+              <Button onClick={handlePlayAudio} variant="secondary">
+                <Play className="mr-2 h-4 w-4" /> Play Audio
+              </Button>
+              <Button onClick={handleDownloadAudio} variant="secondary">
+                <Download className="mr-2 h-4 w-4" /> Download Audio
+              </Button>
+            </>
           )}
         </div>
         {stream && <DecibelMeter stream={stream} />}

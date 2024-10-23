@@ -10,7 +10,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Download } from 'lucide-react';
+import { Mic, MicOff, Download, Play, Pause } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface DecibelMeterProps {
   stream: MediaStream | null;
@@ -51,7 +52,9 @@ const DecibelMeter: React.FC<DecibelMeterProps> = ({ stream }) => {
     }
 
     return () => {
-      if (audioContextRef.current) audioContextRef.current.close();
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
     };
   }, [stream]);
 
@@ -84,33 +87,94 @@ interface Device {
 }
 
 const Section: React.FC<{ title: string }> = ({ title }) => {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [inputDevices, setInputDevices] = useState<Device[]>([]);
+  const [outputDevices, setOutputDevices] = useState<Device[]>([]);
+  const [selectedInputDevice, setSelectedInputDevice] = useState<string | null>(
+    null
+  );
+  const [selectedOutputDevice, setSelectedOutputDevice] = useState<
+    string | null
+  >(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [recorder, setRecorder] = useState<any | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+
+  const checkOutputDeviceSupport = async () => {
+    if (!('setSinkId' in HTMLAudioElement.prototype)) {
+      setError('Your browser does not support audio output device selection');
+      return false;
+    }
+    return true;
+  };
+
+  const updateDeviceList = async () => {
+    try {
+      const deviceInfos = await navigator.mediaDevices.enumerateDevices();
+
+      const audioInputs = deviceInfos
+        .filter((device) => device.kind === 'audioinput')
+        .map((device) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${device.deviceId}`,
+        }));
+
+      const audioOutputs = deviceInfos
+        .filter((device) => device.kind === 'audiooutput')
+        .map((device) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Speaker ${device.deviceId}`,
+        }));
+
+      setInputDevices(audioInputs);
+      setOutputDevices(audioOutputs);
+    } catch (err) {
+      console.error('Error enumerating devices:', err);
+      setError('Failed to get audio devices');
+    }
+  };
 
   useEffect(() => {
-    const getMicrophoneAccess = async () => {
+    const initializeDevices = async () => {
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
-        const deviceInfos = await navigator.mediaDevices.enumerateDevices();
-        const audioDevices = deviceInfos.filter(
-          (device) => device.kind === 'audioinput'
+        await updateDeviceList();
+        await checkOutputDeviceSupport();
+
+        navigator.mediaDevices.addEventListener(
+          'devicechange',
+          updateDeviceList
         );
-        setDevices(audioDevices as Device[]);
-      } catch (error) {
-        console.error('Error accessing microphone:', error);
+      } catch (err) {
+        console.error('Error initializing devices:', err);
+        setError('Failed to initialize audio devices');
       }
     };
 
-    getMicrophoneAccess();
+    initializeDevices();
+
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        'devicechange',
+        updateDeviceList
+      );
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
   }, []);
 
   const handleStartTalking = async () => {
-    if (selectedDevice) {
+    if (selectedInputDevice) {
       try {
-        const constraints = { audio: { deviceId: { exact: selectedDevice } } };
+        setError(null);
+        const constraints = {
+          audio: { deviceId: { exact: selectedInputDevice } },
+        };
         const newStream = await navigator.mediaDevices.getUserMedia(
           constraints
         );
@@ -119,7 +183,6 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
           'recordrtc'
         );
 
-        // Create a new RecordRTC instance for continuous recording
         const primaryRecorder = new RecordRTC(newStream, {
           type: 'audio',
           mimeType: 'audio/wav',
@@ -131,8 +194,9 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
         primaryRecorder.startRecording();
         setRecorder(primaryRecorder);
         setStream(newStream);
-      } catch (error) {
-        console.error('Error accessing microphone:', error);
+      } catch (err) {
+        console.error('Error starting recording:', err);
+        setError('Failed to start recording');
       }
     }
   };
@@ -153,22 +217,96 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
   };
 
   const handleDownloadAudio = () => {
-    if (audioBlob && selectedDevice) {
-      const micName = devices.find(
-        (device) => device.deviceId === selectedDevice
+    if (audioBlob && selectedInputDevice) {
+      const micName = inputDevices.find(
+        (device) => device.deviceId === selectedInputDevice
       )?.label;
       const filename = micName
         ? `${micName.replace(/[^a-z0-9]/gi, '_')}_recording.wav`
         : 'audio_recording.wav';
 
+      const url = URL.createObjectURL(audioBlob);
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(audioBlob);
+      link.href = url;
       link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     }
   };
+
+  const handlePlayAudio = async () => {
+    if (!audioBlob || !selectedOutputDevice) return;
+
+    try {
+      setError(null);
+
+      if (!audioElementRef.current) {
+        audioElementRef.current = new Audio();
+      }
+
+      // Create a new AudioContext if needed
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext ||
+          (window as any).webkitAudioContext)();
+        gainNodeRef.current = audioContextRef.current.createGain();
+        gainNodeRef.current.connect(audioContextRef.current.destination);
+      }
+
+      const audioUrl = URL.createObjectURL(audioBlob);
+      audioElementRef.current.src = audioUrl;
+
+      try {
+        // Check if setSinkId is supported
+        if ('setSinkId' in audioElementRef.current) {
+          await (audioElementRef.current as any).setSinkId(
+            selectedOutputDevice
+          );
+          console.log('Audio output device set successfully');
+        } else {
+          console.warn('setSinkId not supported');
+        }
+      } catch (err) {
+        console.error('Error setting audio output:', err);
+        setError('Could not set audio output device. Using system default.');
+      }
+
+      await audioElementRef.current.play();
+      setIsPlaying(true);
+
+      audioElementRef.current.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+    } catch (err) {
+      console.error('Error playing audio:', err);
+      setError('Failed to play audio');
+      setIsPlaying(false);
+    }
+  };
+
+  const handlePauseAudio = () => {
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  // Cleanup effect
+  useEffect(() => {
+    return () => {
+      if (audioElementRef.current) {
+        audioElementRef.current.pause();
+        if (audioElementRef.current.src) {
+          URL.revokeObjectURL(audioElementRef.current.src);
+        }
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
 
   return (
     <Card className="mb-6">
@@ -176,36 +314,91 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <Select onValueChange={setSelectedDevice} value={selectedDevice || ''}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select Microphone" />
-          </SelectTrigger>
-          <SelectContent>
-            {devices.map((device) => (
-              <SelectItem
-                key={device.deviceId}
-                value={device.deviceId || `device-${Math.random()}`}
-              >
-                {device.label || `Microphone ${device.deviceId}`}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex gap-4 mt-4">
-          <Button onClick={handleStartTalking} disabled={!selectedDevice}>
-            <Mic className="mr-2 h-4 w-4" /> Start Talking
-          </Button>
-          <Button
-            onClick={handleStopTalking}
-            disabled={!stream}
-            variant="secondary"
-          >
-            <MicOff className="mr-2 h-4 w-4" /> Stop Talking
-          </Button>
-          {audioBlob && (
-            <Button onClick={handleDownloadAudio} variant="secondary">
-              <Download className="mr-2 h-4 w-4" /> Download Audio
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium mb-2 block">
+              Input Device
+            </label>
+            <Select
+              onValueChange={setSelectedInputDevice}
+              value={selectedInputDevice || ''}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select Microphone" />
+              </SelectTrigger>
+              <SelectContent>
+                {inputDevices.map((device) => (
+                  <SelectItem key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-2 block">
+              Output Device
+            </label>
+            <Select
+              onValueChange={setSelectedOutputDevice}
+              value={selectedOutputDevice || ''}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select Speaker" />
+              </SelectTrigger>
+              <SelectContent>
+                {outputDevices.map((device) => (
+                  <SelectItem key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex gap-4">
+            <Button
+              onClick={handleStartTalking}
+              disabled={!selectedInputDevice || !!stream}
+            >
+              <Mic className="mr-2 h-4 w-4" /> Start Talking
             </Button>
+            <Button
+              onClick={handleStopTalking}
+              disabled={!stream}
+              variant="secondary"
+            >
+              <MicOff className="mr-2 h-4 w-4" /> Stop Talking
+            </Button>
+            {audioBlob && (
+              <>
+                <Button onClick={handleDownloadAudio} variant="secondary">
+                  <Download className="mr-2 h-4 w-4" /> Download Audio
+                </Button>
+                <Button
+                  onClick={isPlaying ? handlePauseAudio : handlePlayAudio}
+                  disabled={!selectedOutputDevice}
+                  variant="secondary"
+                >
+                  {isPlaying ? (
+                    <>
+                      <Pause className="mr-2 h-4 w-4" /> Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 h-4 w-4" /> Play
+                    </>
+                  )}
+                </Button>
+              </>
+            )}
+          </div>
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
         </div>
         {stream && <DecibelMeter stream={stream} />}
@@ -215,8 +408,8 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
 };
 
 const WebRTCApi: React.FC = () => (
-  <div className="container mx-auto p-6">
-    <h1 className="text-3xl font-bold mb-6">Microphone Decibel Meter</h1>
+  <div className="container mx-auto p-6 w-fit">
+    <h1 className="text-3xl font-bold mb-6">Mic and Speaker Audio Routing </h1>
     <Section title="Sales" />
     <Section title="Client" />
   </div>
