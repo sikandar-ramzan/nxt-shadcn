@@ -137,7 +137,10 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
           </SelectTrigger>
           <SelectContent>
             {devices.map((device) => (
-              <SelectItem key={device.deviceId} value={device.deviceId}>
+              <SelectItem
+                key={device.deviceId}
+                value={device.deviceId || `device-${Math.random()}`}
+              >
                 {device.label || `Microphone ${device.deviceId}`}
               </SelectItem>
             ))}
