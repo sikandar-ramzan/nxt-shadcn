@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff } from 'lucide-react';
+import { Mic, MicOff, Download } from 'lucide-react';
 
 interface DecibelMeterProps {
   stream: MediaStream | null;
@@ -87,13 +87,13 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [recorder, setRecorder] = useState<any | null>(null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
 
   useEffect(() => {
     const getMicrophoneAccess = async () => {
       try {
-        // Request permission to access the microphone
         await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Enumerate devices once permission is granted
         const deviceInfos = await navigator.mediaDevices.enumerateDevices();
         const audioDevices = deviceInfos.filter(
           (device) => device.kind === 'audioinput'
@@ -114,6 +114,22 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
         const newStream = await navigator.mediaDevices.getUserMedia(
           constraints
         );
+
+        const { default: RecordRTC, StereoAudioRecorder } = await import(
+          'recordrtc'
+        );
+
+        // Create a new RecordRTC instance for continuous recording
+        const primaryRecorder = new RecordRTC(newStream, {
+          type: 'audio',
+          mimeType: 'audio/wav',
+          recorderType: StereoAudioRecorder,
+          numberOfAudioChannels: 1,
+          desiredSampRate: 16000,
+        });
+
+        primaryRecorder.startRecording();
+        setRecorder(primaryRecorder);
         setStream(newStream);
       } catch (error) {
         console.error('Error accessing microphone:', error);
@@ -122,9 +138,35 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
   };
 
   const handleStopTalking = () => {
+    if (recorder) {
+      recorder.stopRecording(() => {
+        const recordedBlob = recorder.getBlob();
+        setAudioBlob(recordedBlob);
+      });
+      setRecorder(null);
+    }
+
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
       setStream(null);
+    }
+  };
+
+  const handleDownloadAudio = () => {
+    if (audioBlob && selectedDevice) {
+      const micName = devices.find(
+        (device) => device.deviceId === selectedDevice
+      )?.label;
+      const filename = micName
+        ? `${micName.replace(/[^a-z0-9]/gi, '_')}_recording.wav`
+        : 'audio_recording.wav';
+
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(audioBlob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -160,6 +202,11 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
           >
             <MicOff className="mr-2 h-4 w-4" /> Stop Talking
           </Button>
+          {audioBlob && (
+            <Button onClick={handleDownloadAudio} variant="secondary">
+              <Download className="mr-2 h-4 w-4" /> Download Audio
+            </Button>
+          )}
         </div>
         {stream && <DecibelMeter stream={stream} />}
       </CardContent>
@@ -167,7 +214,7 @@ const Section: React.FC<{ title: string }> = ({ title }) => {
   );
 };
 
-const AudioMonitor: React.FC = () => (
+const WebRTCApi: React.FC = () => (
   <div className="container mx-auto p-6">
     <h1 className="text-3xl font-bold mb-6">Microphone Decibel Meter</h1>
     <Section title="Sales" />
@@ -175,4 +222,4 @@ const AudioMonitor: React.FC = () => (
   </div>
 );
 
-export default AudioMonitor;
+export default WebRTCApi;
